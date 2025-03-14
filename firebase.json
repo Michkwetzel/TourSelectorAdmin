@@ -1,0 +1,27 @@
+{
+  "flutter": {
+    "platforms": {
+      "dart": {
+        "lib/firebase_options.dart": {
+          "projectId": "tourselector-b74bb",
+          "configurations": {
+            "web": "1:501818879560:web:91d574fc7ad8a03ad3f27d"
+          }
+        }
+      }
+    }
+  },
+  "hosting": {
+    "public": "build/web",
+    "site": "admin-f7e63",
+    "ignore": [
+      "firebase.json",
+      "**/.*",
+      "**/node_modules/**"
+    ],
+    "framework": "flutter",
+    "frameworksBackend": {
+      "region": "europe-west1"
+    }
+  }
+}
