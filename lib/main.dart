@@ -5,10 +5,11 @@ import 'package:tour_selector_admin/firebase_options.dart';
 import 'package:tour_selector_admin/tagsNotifier.dart';
 
 void main() async {
+  WidgetsFlutterBinding.ensureInitialized();
   await Firebase.initializeApp(
     options: DefaultFirebaseOptions.currentPlatform,
   );
-  runApp(ProviderScope(child: const MyApp()));
+  runApp(const ProviderScope(child: MyApp()));
 }
 
 class MyApp extends StatelessWidget {
@@ -16,28 +17,16 @@ class MyApp extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return MaterialApp(home: TagsDisplayScreen());
-  }
-}
-
-class MainScreen extends StatelessWidget {
-  const MainScreen({super.key});
-
-  @override
-  Widget build(BuildContext context) {
-    return Column(
-      children: [
-        Text('Tour Selector Admin'),
-        Row(
-          children: [TextField(), TextButton(onPressed: () {}, child: Text('Add Tag'))],
-        )
-      ],
+    return MaterialApp(
+      title: 'Tour Selector Admin',
+      theme: ThemeData(
+        primarySwatch: Colors.blue,
+        useMaterial3: true,
+      ),
+      home: const TagsDisplayScreen(),
     );
   }
 }
-
-// Import your provider
-// import 'path_to_your_tags_notifier.dart';
 
 class TagsDisplayScreen extends ConsumerWidget {
   const TagsDisplayScreen({Key? key}) : super(key: key);
@@ -48,7 +37,7 @@ class TagsDisplayScreen extends ConsumerWidget {
 
     return Scaffold(
       appBar: AppBar(
-        title: const Text('Tags Display'),
+        title: const Text('Tags Admin'),
       ),
       body: tagsState.isLoading
           ? const Center(child: CircularProgressIndicator())
@@ -81,7 +70,7 @@ class TagsDisplayScreen extends ConsumerWidget {
                         Padding(
                           padding: const EdgeInsets.all(16.0),
                           child: Text(
-                            'Tags ${tagIndex}',
+                            'Category ${tagIndex}',
                             style: Theme.of(context).textTheme.titleLarge,
                           ),
                         ),
@@ -91,19 +80,9 @@ class TagsDisplayScreen extends ConsumerWidget {
                             child: Text('No tags available'),
                           )
                         else
-                          Padding(
-                            padding: const EdgeInsets.symmetric(horizontal: 8.0),
-                            child: Wrap(
-                              spacing: 8.0,
-                              runSpacing: 8.0,
-                              children: tagEntries.map((entry) {
-                                return TagChip(
-                                  devName: entry.key,
-                                  displayName: entry.value,
-                                  onDelete: () => ref.read(tagsProvider.notifier).removeTag(tagIndex, entry.key),
-                                );
-                              }).toList(),
-                            ),
+                          TagsReorderableList(
+                            tagIndex: tagIndex,
+                            tagEntries: tagEntries,
                           ),
                         const Divider(),
                       ],
@@ -177,36 +156,171 @@ class TagsDisplayScreen extends ConsumerWidget {
   }
 }
 
+class TagsReorderableList extends ConsumerStatefulWidget {
+  final int tagIndex;
+  final List<TagEntry> tagEntries;
+
+  const TagsReorderableList({
+    Key? key,
+    required this.tagIndex,
+    required this.tagEntries,
+  }) : super(key: key);
+
+  @override
+  ConsumerState<TagsReorderableList> createState() => _TagsReorderableListState();
+}
+
+class _TagsReorderableListState extends ConsumerState<TagsReorderableList> {
+  late List<TagEntry> _tags;
+
+  @override
+  void initState() {
+    super.initState();
+    _tags = List.from(widget.tagEntries);
+  }
+
+  @override
+  void didUpdateWidget(TagsReorderableList oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (widget.tagEntries != oldWidget.tagEntries) {
+      _tags = List.from(widget.tagEntries);
+    }
+  }
+
+  void _onReorder(int oldIndex, int newIndex) {
+    setState(() {
+      if (oldIndex < newIndex) {
+        newIndex -= 1;
+      }
+      final item = _tags.removeAt(oldIndex);
+      _tags.insert(newIndex, item);
+    });
+
+    // Update the order in Firestore
+    ref.read(tagsProvider.notifier).updateTagsOrder(widget.tagIndex, _tags);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 16.0),
+      child: SingleChildScrollView(
+        child: Wrap(
+          spacing: 8.0,
+          runSpacing: 8.0,
+          children: [
+            for (int i = 0; i < _tags.length; i++)
+              DraggableTagChip(
+                key: ValueKey(_tags[i].devName),
+                tag: _tags[i],
+                index: i,
+                onReorder: _onReorder,
+                onDelete: () => ref.read(tagsProvider.notifier).removeTag(widget.tagIndex, _tags[i].devName),
+              ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class DraggableTagChip extends StatelessWidget {
+  final TagEntry tag;
+  final int index;
+  final Function(int oldIndex, int newIndex) onReorder;
+  final VoidCallback onDelete;
+
+  const DraggableTagChip({
+    Key? key,
+    required this.tag,
+    required this.index,
+    required this.onReorder,
+    required this.onDelete,
+  }) : super(key: key);
+
+  @override
+  Widget build(BuildContext context) {
+    return LongPressDraggable<int>(
+      data: index,
+      feedback: Material(
+        elevation: 4.0,
+        color: Colors.transparent,
+        child: TagChip(
+          devName: tag.devName,
+          displayName: tag.displayName,
+          onDelete: () {}, // Disable delete in the dragged preview
+          isDragging: true,
+        ),
+      ),
+      childWhenDragging: Opacity(
+        opacity: 0.3,
+        child: TagChip(
+          devName: tag.devName,
+          displayName: tag.displayName,
+          onDelete: onDelete,
+        ),
+      ),
+      child: DragTarget<int>(
+        builder: (context, candidateData, rejectedData) {
+          return TagChip(
+            devName: tag.devName,
+            displayName: tag.displayName,
+            onDelete: onDelete,
+            isTargeted: candidateData.isNotEmpty,
+          );
+        },
+        onAccept: (draggedIndex) {
+          onReorder(draggedIndex, index);
+        },
+      ),
+    );
+  }
+}
+
 class TagChip extends StatelessWidget {
   final String devName;
   final String displayName;
   final VoidCallback onDelete;
+  final bool isTargeted;
+  final bool isDragging;
 
   const TagChip({
     Key? key,
     required this.devName,
     required this.displayName,
     required this.onDelete,
+    this.isTargeted = false,
+    this.isDragging = false,
   }) : super(key: key);
 
   @override
   Widget build(BuildContext context) {
-    return Chip(
-      label: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Text(displayName),
-          Text(
-            devName,
-            style: TextStyle(
-              fontSize: 10,
-              color: Colors.grey.shade600,
-            ),
-          ),
-        ],
+    return Container(
+      decoration: BoxDecoration(
+        borderRadius: BorderRadius.circular(32),
+        border: isTargeted ? Border.all(color: Colors.blue, width: 2) : null,
       ),
-      deleteIcon: const Icon(Icons.clear, size: 16),
-      onDeleted: onDelete,
+      child: Chip(
+        backgroundColor: isTargeted ? Colors.blue.withOpacity(0.1) : null,
+        label: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(displayName),
+            Text(
+              devName,
+              style: TextStyle(
+                fontSize: 10,
+                color: Colors.grey.shade600,
+              ),
+            ),
+          ],
+        ),
+        deleteIcon: const Icon(Icons.clear, size: 16),
+        onDeleted: onDelete,
+        materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
+        avatar: const Icon(Icons.drag_handle, size: 16),
+        elevation: isDragging ? 4 : 0,
+      ),
     );
   }
 }
