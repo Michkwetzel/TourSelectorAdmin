@@ -1,5 +1,6 @@
 import 'package:firebase_core/firebase_core.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:tour_selector_admin/firebase_options.dart';
 import 'package:tour_selector_admin/tagsNotifier.dart';
@@ -35,9 +36,44 @@ class TagsDisplayScreen extends ConsumerWidget {
   Widget build(BuildContext context, WidgetRef ref) {
     final tagsState = ref.watch(tagsProvider);
 
+    // Calculate total weight for visible categories with tags
+    final totalWeight = tagsState.categoryConfigs.entries
+        .where((entry) {
+          int index = entry.key;
+          bool hasAnyTags = tagsState.getTagsForIndex(index).isNotEmpty;
+          return entry.value.isVisible && hasAnyTags;
+        })
+        .map((entry) => entry.value.weight)
+        .fold(0, (sum, weight) => sum + weight);
+
+    // Check if weights are valid
+    final bool weightsValid = totalWeight == 10;
+
     return Scaffold(
       appBar: AppBar(
         title: const Text('Tags Admin'),
+        actions: [
+          // Weight indicator
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 16.0),
+            child: Center(
+              child: Container(
+                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+                decoration: BoxDecoration(
+                  color: weightsValid ? Colors.green : Colors.red,
+                  borderRadius: BorderRadius.circular(16),
+                ),
+                child: Text(
+                  'Weights: $totalWeight / 10',
+                  style: const TextStyle(
+                    color: Colors.white,
+                    fontWeight: FontWeight.bold,
+                  ),
+                ),
+              ),
+            ),
+          ),
+        ],
       ),
       body: tagsState.isLoading
           ? const Center(child: CircularProgressIndicator())
@@ -63,15 +99,87 @@ class TagsDisplayScreen extends ConsumerWidget {
                   itemBuilder: (context, index) {
                     final tagIndex = index + 1; // Convert to 1-based index
                     final tagEntries = tagsState.getTagsForIndex(tagIndex);
+                    final categoryConfig = tagsState.getCategoryConfig(tagIndex);
 
                     return Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
                         Padding(
                           padding: const EdgeInsets.all(16.0),
-                          child: Text(
-                            'Category ${tagIndex}',
-                            style: Theme.of(context).textTheme.titleLarge,
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Row(
+                                children: [
+                                  // Category title editor
+                                  Expanded(
+                                    flex: 7,
+                                    child: IntrinsicHeight(
+                                      child: TextField(
+                                        controller: TextEditingController(text: categoryConfig.title),
+                                        decoration: InputDecoration(
+                                          labelText: 'Category $tagIndex Title',
+                                          border: const OutlineInputBorder(),
+                                        ),
+                                        onSubmitted: (value) {
+                                          ref.read(tagsProvider.notifier).updateCategoryTitle(tagIndex, value);
+                                        },
+                                      ),
+                                    ),
+                                  ),
+                                  const SizedBox(width: 16),
+                                  // Weight input field
+                                  Expanded(
+                                    flex: 1,
+                                    child: IntrinsicHeight(
+                                      child: TextField(
+                                        controller: TextEditingController(text: categoryConfig.weight.toString()),
+                                        decoration: const InputDecoration(
+                                          labelText: 'Weight',
+                                          border: OutlineInputBorder(),
+                                          helperText: 'Total: 10',
+                                        ),
+                                        keyboardType: TextInputType.number,
+                                        inputFormatters: [
+                                          FilteringTextInputFormatter.digitsOnly,
+                                        ],
+                                        onSubmitted: (value) {
+                                          final weight = int.tryParse(value) ?? 0;
+                                          ref.read(tagsProvider.notifier).updateCategoryWeight(
+                                                tagIndex,
+                                                weight.clamp(0, 10), // Ensure weight is between 0 and 10
+                                              );
+                                        },
+                                      ),
+                                    ),
+                                  ),
+                                ],
+                              ),
+                              const SizedBox(height: 8),
+                              // Visibility checkbox
+                              Row(
+                                children: [
+                                  Checkbox(
+                                    value: categoryConfig.isVisible,
+                                    onChanged: (value) {
+                                      if (value != null) {
+                                        ref.read(tagsProvider.notifier).updateCategoryVisibility(tagIndex, value);
+                                      }
+                                    },
+                                  ),
+                                  const Text('Show in User Frontend'),
+                                  // Tag count information
+                                  const Spacer(),
+                                  Text(
+                                    '${tagEntries.length} tag${tagEntries.length == 1 ? '' : 's'}',
+                                    style: TextStyle(
+                                      color: tagEntries.isEmpty ? Colors.red : Colors.green,
+                                      fontWeight: FontWeight.bold,
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            ],
                           ),
                         ),
                         if (tagEntries.isEmpty)
@@ -93,6 +201,17 @@ class TagsDisplayScreen extends ConsumerWidget {
         onPressed: () => _showAddTagDialog(context, ref),
         child: const Icon(Icons.add),
       ),
+      bottomNavigationBar: !weightsValid
+          ? Container(
+              color: Colors.red.shade100,
+              padding: const EdgeInsets.all(16),
+              child: const Text(
+                'Warning: The weights of visible categories with tags must sum to exactly 10',
+                style: TextStyle(color: Colors.red, fontWeight: FontWeight.bold),
+                textAlign: TextAlign.center,
+              ),
+            )
+          : null,
     );
   }
 
@@ -108,18 +227,27 @@ class TagsDisplayScreen extends ConsumerWidget {
         content: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            DropdownButtonFormField<int>(
-              value: selectedIndex,
-              decoration: const InputDecoration(labelText: 'Tag Category'),
-              items: List.generate(
-                6,
-                (index) => DropdownMenuItem(
-                  value: index + 1,
-                  child: Text('Category ${index + 1}'),
-                ),
-              ),
-              onChanged: (value) {
-                selectedIndex = value!;
+            Consumer(
+              builder: (context, ref, _) {
+                final tagsState = ref.watch(tagsProvider);
+                return DropdownButtonFormField<int>(
+                  value: selectedIndex,
+                  decoration: const InputDecoration(labelText: 'Tag Category'),
+                  items: List.generate(
+                    6,
+                    (index) {
+                      final categoryIndex = index + 1;
+                      final config = tagsState.getCategoryConfig(categoryIndex);
+                      return DropdownMenuItem(
+                        value: categoryIndex,
+                        child: Text('${config.title} (${config.weight})'),
+                      );
+                    },
+                  ),
+                  onChanged: (value) {
+                    selectedIndex = value!;
+                  },
+                );
               },
             ),
             TextField(
